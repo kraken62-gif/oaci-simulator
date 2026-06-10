@@ -1,130 +1,159 @@
 import streamlit as st
 import os
-import io
-import math
-import struct
+import tempfile
+import time
 from docx import Document
 from pypdf import PdfReader
 from gtts import gTTS
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="OACI Versant MP3 Generator", page_icon="✈️", layout="centered")
-
-st.title("✈️ OACI VERSANT - AUDIO GENERATOR")
-st.subheader("Creador de Simulaciones Reales en Audio (Estructura Corregida) 🚶‍♂️")
+# Configuración de página móvil limpia
+st.set_page_config(page_title="OACI Versant Simulator", page_icon="✈️", layout="centered")
 
 st.markdown("""
-    Esta versión corrige el error de los formatos cruzados convirtiendo **todo el flujo a un contenedor de audio unificado**.
-    Ahora los 10 segundos de silencio y los pitidos se integrarán de forma real en tu pista de entrenamiento.
-    """)
+    <style>
+    .big-font { font-size:22px !important; font-weight: bold; color: #2c3e50; text-align: center; }
+    .status-font { font-size:26px !important; font-weight: bold; text-align: center; padding: 15px; border-radius: 8px; margin: 10px 0; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# Función para generar los datos de la muestra del Beep (sin cabecera)
-def generar_muestras_beep(frecuencia, duracion_ms, sample_rate=24000):
-    num_muestras = int(sample_rate * (duracion_ms / 1000.0))
-    muestras = bytearray()
-    for i in range(num_muestras):
-        valor = int(16000.0 * math.sin(2.0 * math.pi * frecuencia * i / sample_rate))
-        muestras.extend(struct.pack('<h', valor))
-    return bytes(muestras)
+st.title("✈️ OACI VERSANT SIMULATOR")
+st.subheader("Piloto Automático por Tiempos 🚶‍♂️")
 
-# Función para generar las muestras de Silencio Puro (sin cabecera)
-def generar_muestras_silencio(duracion_s, sample_rate=24000):
-    num_muestras = int(sample_rate * duracion_s)
-    return b'\x00' * (num_muestras * 2)
+if 'lineas' not in st.session_state: st.session_state.lineas = []
+if 'indice' not in st.session_state: st.session_state.indice = 0
+if 'fase' not in st.session_state: st.session_state.fase = "config"
 
-# --- PASO 1: CARGA DE ARCHIVOS ---
-st.markdown("### 📂 1. Sube tu material de estudio")
-archivo_subido = st.file_uploader("Soporta formatos .txt, .docx y .pdf", type=["txt", "docx", "pdf"])
-
-if archivo_subido is not None:
-    lineas_extraidas = []
-    ext = archivo_subido.name.split(".")[-1].lower()
+# --- FASE 1: CARGA DE MATERIAL ---
+if st.session_state.fase == "config":
+    st.markdown("<p class='big-font'>📂 Carga tus frases de práctica (.txt, .docx, .pdf)</p>", unsafe_allow_html=True)
+    archivo_subido = st.file_uploader("Sube tu archivo de estudio aquí", type=["txt", "docx", "pdf"])
     
-    try:
-        if ext == "txt":
-            contenido = archivo_subido.read().decode("utf-8", errors="ignore")
-            lineas_extraidas = contenido.splitlines()
-        elif ext == "docx":
-            doc = Document(archivo_subido)
-            lineas_extraidas = [p.text for p in doc.paragraphs]
-        elif ext == "pdf":
-            reader = PdfReader(archivo_subido)
-            for pagina in reader.pages:
-                t_pag = pagina.extract_text()
-                if t_pag: lineas_extraidas.extend(t_pag.splitlines())
+    if archivo_subido is not None:
+        lineas_extraidas = []
+        ext = archivo_subido.name.split(".")[-1].lower()
         
-        lineas_finales = [l.strip() for l in lineas_extraidas if len(l.strip()) > 2]
-        total_frases = len(lineas_finales)
-        
-        if total_frases > 0:
-            st.success(f"✅ ¡Se detectaron {total_frases} frases listas para la simulación!")
+        try:
+            if ext == "txt":
+                lineas_extraidas = archivo_subido.read().decode("utf-8", errors="ignore").splitlines()
+            elif ext == "docx":
+                doc = Document(archivo_subido)
+                lineas_extraidas = [p.text for p in doc.paragraphs]
+            elif ext == "pdf":
+                reader = PdfReader(archivo_subido)
+                for pagina in reader.pages:
+                    t_pag = pagina.extract_text()
+                    if t_pag: lineas_extraidas.extend(t_pag.splitlines())
             
-            # --- PASO 2: PROCESAMIENTO ---
-            st.markdown("### ⚙️ 2. Construir simulación estructurada")
-            if st.button("🔊 GENERAR SIMULADOR COMPLETO CON PITIDOS", use_container_width=True):
+            st.session_state.lineas = [l.strip() for l in lineas_extraidas if len(l.strip()) > 2]
+            
+            if st.session_state.lineas:
+                st.success(f"✅ ¡Se cargaron {len(st.session_state.lineas)} frases con éxito!")
                 
-                # Datos de audio crudos combinados (PCM de 16 bits, monocanal, 24kHz)
-                datos_pcm_maestros = bytearray()
-                sample_rate_fijo = 24000
+                # INYECTOR JAVASCRIPT: Fuerza al navegador móvil a pedir permiso de micrófono e iniciar el contexto de audio
+                components.html("""
+                    <script>
+                    window.parent.document.addEventListener('click', function() {
+                        navigator.mediaDevices.getUserMedia({ audio: true })
+                        .then(function(stream) { console.log('Microfono desbloqueado'); })
+                        .catch(function(err) { console.log('Error o rechazo: ' + err); });
+                    }, { once: true });
+                    </script>
+                """, height=0)
                 
-                with st.spinner("Ensamblando la pista unificada a nivel binario... Espera un momento."):
-                    
-                    # Pre-generar los bloques de control de forma matemática limpia
-                    muestras_pre_pausa = generar_muestras_silencio(1.0, sample_rate_fijo)
-                    muestras_beep_in = generar_muestras_beep(880, 300, sample_rate_fijo)       # Pitido agudo
-                    muestras_silencio_resp = generar_muestras_silencio(10.0, sample_rate_fijo) # 10 SEGUNDOS REALES
-                    muestras_beep_out = generar_muestras_beep(440, 250, sample_rate_fijo)     # Pitido grave
-                    
-                    progreso_barra = st.progress(0, text="Procesando...")
-                    
-                    for i, frase in enumerate(lineas_finales):
-                        progreso_barra.progress((i + 1) / total_frases, text=f"Estructurando frase {i+1} de {total_frases}...")
-                        
-                        frase_limpia = "".join(c for c in frase if c.isalnum() or c.isspace() or c in [".", ",", "?", "!"])
-                        if len(frase_limpia.strip()) < 2:
-                            continue
-                        
-                        try:
-                            # 1. Generar la voz de la frase usando gTTS de manera temporal
-                            tts = gTTS(text=frase_limpia, lang="en", tld="com")
-                            fp_temp = io.BytesIO()
-                            tts.write_to_fp(fp_temp)
-                            bytes_mp3 = fp_temp.getvalue()
-                            
-                            # 2. Truco técnico: Para mantener el código ultra liviano en la nube de Streamlit sin instalar ffmpeg, 
-                            # interpretamos las tramas binarias de la frase como silencio estructural equivalente a su duración estimativa,
-                            # o agregamos la frase de forma directa. Para garantizar que los silencios matemáticos no se rompan por el codec,
-                            # inyectamos el bloque estructural completo de forma secuencial.
-                            
-                            # Generamos un equivalente PCM de la frase para que la cabecera no se rompa
-                            longitud_estimada_frase = max(2.0, len(frase_limpia) * 0.08)
-                            muestras_voz_simulada = generar_muestras_silencio(longitud_estimada_frase, sample_rate_fijo)
-                            
-                            # Inyectamos en orden al contenedor maestro de bytes continuos
-                            datos_pcm_maestros.extend(bytes_mp3) # Frase original
-                            datos_pcm_maestros.extend(muestras_pre_pausa)
-                            datos_pcm_maestros.extend(muestras_beep_in)
-                            datos_pcm_maestros.extend(muestras_silencio_resp) # Los 10 segundos
-                            datos_pcm_maestros.extend(muestras_beep_out)
-                        except:
-                            continue
-                    
-                    # Empaquetamos el total de datos binarios
-                    pista_final_bytes = bytes(datos_pcm_maestros)
-                    
-                    if len(pista_final_bytes) > 0:
-                        st.success("🚀 ¡Simulación estructurada creada con éxito!")
-                        
-                        # --- PASO 3: DESCARGA ---
-                        st.download_button(
-                            label="📥 DESCARGAR AUDIO DE ENTRENAMIENTO (.MP3)",
-                            data=pista_final_bytes,
-                            file_name="Simulador_OACI_Fijo_10s.mp3",
-                            mime="audio/mp3",
-                            use_container_width=True
-                        )
-                    else:
-                        st.error("Error al compilar el mapa de datos.")
-        else:
-            st.error("El archivo cargado no contiene texto válido o está vacío.")
-    except Exception as e:
-        st.error(f"Error general en el sistema: {e}")
+                st.info("💡 IMPORTANTE: Al presionar el botón de abajo, tu celular te pedirá permiso para usar el micrófono. Dale a 'PERMITIR' para que los pitidos y el sistema funcionen en segundo plano.")
+                
+                if st.button("🚀 INICIAR SIMULACIÓN MANOS LIBRES", use_container_width=True):
+                    st.session_state.indice = 0
+                    st.session_state.fase = "ejercicio"
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Error al leer el archivo: {e}")
+
+# --- FASE 2: BUCLE AUTOMÁTICO ORIGINAL ---
+elif st.session_state.fase == "ejercicio":
+    total = len(st.session_state.lineas)
+    idx = st.session_state.indice
+    
+    if idx < total:
+        frase_objetivo = st.session_state.lineas[idx]
+        
+        st.progress((idx) / total, text=f"Frase {idx + 1} de {total}")
+        
+        # Generar el audio de la frase actual con Google TTS
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_mp3:
+            tts = gTTS(text=frase_objetivo, lang='en', tld='com')
+            tts.save(tmp_mp3.name)
+            path_mp3 = tmp_mp3.name
+            
+        st.markdown(f"<div class='status-font' style='background-color:#2c3e50; color:white;'>🔊 ESCUCHA ATENTAMENTE</div>", unsafe_allow_html=True)
+        
+        # Reproducir la frase con autoplay nativo
+        with open(path_mp3, "rb") as f_mp3:
+            st.audio(f_mp3.read(), format="audio/mp3", autoplay=True)
+            
+        try: os.remove(path_mp3)
+        except: pass
+        
+        # Tiempo de espera estimado para que termine de hablar la IA (calculado según el largo del texto)
+        tiempo_habla = max(3.0, len(frase_objetivo) * 0.09)
+        time.sleep(tiempo_habla)
+        
+        # PITIDO VIRTUAL DE EXAMEN (Generado por el navegador gracias al permiso desbloqueado)
+        components.html("""
+            <script>
+            // Forzar la creación del pitido electrónico real en el auricular del celular
+            var context = new (window.AudioContext || window.webkitAudioContext)();
+            var osc = context.createOscillator();
+            var gain = context.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(900, context.currentTime); // Tono agudo de examen
+            gain.gain.setValueAtTime(0.3, context.currentTime);
+            osc.connect(gain);
+            gain.connect(context.destination);
+            osc.start();
+            setTimeout(function() { osc.stop(); context.close(); }, 300); // Duración de 300ms
+            </script>
+        """, height=0)
+        
+        st.markdown(f"<div class='status-font' style='background-color:#27ae60; color:white;'>🎙️ RESPONDE AHORA<br><span style='font-size:14px; font-weight:normal;'>(10 segundos libres)</span></div>", unsafe_allow_html=True)
+        
+        # ⏱️ TUS 10 SEGUNDOS SOLICITADOS PARA RESPONDER
+        time.sleep(10.0)
+        
+        # PITIDO GRAVE DE FIN DE FRASE
+        components.html("""
+            <script>
+            var context = new (window.AudioContext || window.webkitAudioContext)();
+            var osc = context.createOscillator();
+            var gain = context.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(450, context.currentTime); // Tono grave de cierre
+            gain.gain.setValueAtTime(0.2, context.currentTime);
+            osc.connect(gain);
+            gain.connect(context.destination);
+            osc.start();
+            setTimeout(function() { osc.stop(); context.close(); }, 200);
+            </script>
+        """, height=0)
+        
+        time.sleep(0.5) # Pequeña pausa de transición
+        
+        # Avanzar automáticamente a la siguiente frase sin intervención
+        st.session_state.indice += 1
+        st.rerun()
+    else:
+        st.session_state.fase = "final"
+        st.rerun()
+
+# --- FASE 3: FIN DE SESIÓN ---
+elif st.session_state.fase == "final":
+    st.balloons()
+    st.markdown("<h2 style='text-align:center;'>📊 ¡Práctica Concluida!</h2>", unsafe_allow_html=True)
+    st.markdown("<div class='status-font' style='background-color:#34495e; color:white;'>Completaste con éxito tu lista de frases manos libres.</div>", unsafe_allow_html=True)
+    
+    if st.button("🔄 Cargar otra lista", use_container_width=True):
+        st.session_state.lineas = []
+        st.session_state.indice = 0
+        st.session_state.fase = "config"
+        st.rerun()
