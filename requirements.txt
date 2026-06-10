@@ -2,3 +2,5 @@ streamlit
 gtts
 pypdf
 python-docx
+numpy
+scipy
