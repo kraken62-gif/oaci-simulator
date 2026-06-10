@@ -5,14 +5,13 @@ from docx import Document
 from pypdf import PdfReader
 from gtts import gTTS
 
-# Configuración de página móvil limpia
 st.set_page_config(page_title="OACI Versant Audio Generator", page_icon="✈️", layout="centered")
 
 st.title("✈️ OACI VERSANT - AUDIO GENERATOR")
 st.subheader("Creador de Podcast de Entrenamiento Manos Libres 🚶‍♂️")
 
 st.markdown("""
-    Este sistema soluciona el bloqueo de los celulares generando **un único archivo de audio completo (MP3)** con todas tus frases, pitidos y pausas de respuesta integrados. 
+    Genera **un único archivo de audio completo (MP3)** con todas tus frases y pausas integradas. 
     Descárgalo en tu dispositivo, dale Play en tu reproductor de música y entrena sin tocar la pantalla.
     """)
 
@@ -26,23 +25,20 @@ if archivo_subido is not None:
     
     try:
         if ext == "txt":
-            lineas_extraidas = archivo_subido.read().decode("utf-8").splitlines()
+            # Leer el archivo de texto plano de forma segura
+            contenido = archivo_subido.read().decode("utf-8")
+            lineas_extraidas = contenido.splitlines()
         elif ext == "docx":
-            # MÉTODO ULTRA SEGURO: Extraemos el texto binario crudo del documento
             doc = Document(archivo_subido)
-            for p in doc.paragraphs:
-                # Limpiamos espacios en blanco, tabulaciones y caracteres extraños
-                texto_limpio = p.text.strip()
-                if texto_limpio:
-                    lineas_extraidas.append(texto_limpio)
+            lineas_extraidas = [p.text for p in doc.paragraphs]
         elif ext == "pdf":
             reader = PdfReader(archivo_subido)
             for pagina in reader.pages:
                 t_pag = pagina.extract_text()
                 if t_pag: lineas_extraidas.extend(t_pag.splitlines())
         
-        # Filtro final estricto: Eliminamos cualquier residuo vacío o menor a 2 caracteres
-        lineas_finales = [l for l in lineas_extraidas if len(l.strip()) > 2]
+        # Filtro estricto: Limpiar espacios y quitar líneas vacías
+        lineas_finales = [l.strip() for l in lineas_extraidas if len(l.strip()) > 1]
         total_frases = len(lineas_finales)
         
         if total_frases > 0:
@@ -51,58 +47,50 @@ if archivo_subido is not None:
             # --- PASO 2: BOTÓN DE PROCESAMIENTO ---
             st.markdown("### ⚙️ 2. Generar pista de vuelo")
             if st.button("🔊 CREAR ARCHIVO COMPLETO DE AUDIO (MP3)", use_container_width=True):
-                with st.spinner("Construyendo tu pista de entrenamiento... Esto puede tardar un momento dependiendo del tamaño del archivo."):
+                with st.spinner("Construyendo tu pista de entrenamiento... Espera un momento."):
                     
                     path_salida_final = os.path.join(tempfile.gettempdir(), "entrenamiento_oaci_completo.mp3")
                     fragmentos = []
                     
-                    # Generamos los componentes fijos de audio de forma segura
-                    tmp_silencio = os.path.join(tempfile.gettempdir(), "silencio_5s.mp3")
-                    gTTS(text="...", lang="en").save(tmp_silencio)
+                    # Creamos un archivo de silencio estándar de forma segura (5 segundos)
+                    tmp_silencio = os.path.join(tempfile.gettempdir(), "silencia_pausa.mp3")
+                    tts_silencio = gTTS(text=" ... ... ... ", lang="en") 
+                    tts_silencio.save(tmp_silencio)
                     
-                    tmp_beep_inicio = os.path.join(tempfile.gettempdir(), "beep_inicio.mp3")
-                    gTTS(text="Now.", lang="en", tld="com").save(tmp_beep_inicio)
-                    
-                    tmp_beep_fin = os.path.join(tempfile.gettempdir(), "beep_fin.mp3")
-                    gTTS(text="Change.", lang="en", tld="com").save(tmp_beep_fin)
-                    
-                    # Procesamos únicamente las frases válidas que superaron el filtro
+                    # Procesamos las frases
                     for i, frase in enumerate(lineas_finales):
-                        # Doble verificación por si acaso
-                        if not frase or len(frase.strip()) <= 2:
+                        if not frase:
                             continue
                             
-                        tmp_frase = os.path.join(tempfile.gettempdir(), f"frase_{i}.mp3")
+                        tmp_frase = os.path.join(tempfile.gettempdir(), f"f_{i}.mp3")
                         try:
-                            # Forzamos a gTTS a ignorar cualquier símbolo raro limpiando la cadena
-                            frase_filtrada = "".join(c for c in frase if c.isalnum() or c.isspace() or c in [',', '.', '?', '!'])
+                            # Limpieza básica de la frase para evitar caracteres incompatibles
+                            frase_limpia = frase.replace('"', '').replace('(', '').replace(')', '')
                             
-                            if len(frase_filtrada.strip()) > 2:
-                                gTTS(text=frase_filtrada, lang="en", tld="com").save(tmp_frase)
-                                fragmentos.append(tmp_frase)
-                                fragmentos.append(tmp_beep_inicio)
-                                fragmentos.append(tmp_silencio)
-                                fragmentos.append(tmp_beep_fin)
+                            # Generar la voz de la frase en inglés estándar
+                            tts_vuelo = gTTS(text=frase_limpia, lang="en", tld="com")
+                            tts_vuelo.save(tmp_frase)
+                            
+                            # Unimos la frase y su respectivo silencio para que respondas
+                            fragmentos.append(tmp_frase)
+                            fragmentos.append(tmp_silencio)
                         except:
                             continue
                     
-                    # Fusión de los archivos generados
+                    # Fusión de los archivos generados en un solo MP3 masivo
                     if fragmentos:
                         with open(path_salida_final, "wb") as archivo_destino:
                             for f_path in fragmentos:
                                 with open(f_path, "rb") as f_origen:
                                     archivo_destino.write(f_origen.read())
                         
-                        # Limpieza
+                        # Limpieza de archivos temporales individuales
                         for f_path in fragmentos:
                             try:
-                                if "frase_" in f_path:
+                                if "f_" in f_path:
                                     os.remove(f_path)
                             except: pass
-                        try:
-                            os.remove(tmp_silencio)
-                            os.remove(tmp_beep_inicio)
-                            os.remove(tmp_beep_fin)
+                        try: os.remove(tmp_silencio)
                         except: pass
                         
                         st.success("🚀 ¡Tu pista de audio manos libres ha sido generada con éxito!")
@@ -117,7 +105,7 @@ if archivo_subido is not None:
                                 use_container_width=True
                             )
                     else:
-                        st.error("No se pudo procesar ninguna frase del archivo debido al formato del texto.")
+                        st.error("No se pudo procesar el texto del archivo.")
         else:
             st.error("El archivo cargado no contiene texto válido o está vacío.")
     except Exception as e:
