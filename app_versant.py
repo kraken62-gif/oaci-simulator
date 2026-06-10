@@ -28,16 +28,21 @@ if archivo_subido is not None:
         if ext == "txt":
             lineas_extraidas = archivo_subido.read().decode("utf-8").splitlines()
         elif ext == "docx":
+            # MÉTODO ULTRA SEGURO: Extraemos el texto binario crudo del documento
             doc = Document(archivo_subido)
-            lineas_extraidas = [p.text for p in doc.paragraphs]
+            for p in doc.paragraphs:
+                # Limpiamos espacios en blanco, tabulaciones y caracteres extraños
+                texto_limpio = p.text.strip()
+                if texto_limpio:
+                    lineas_extraidas.append(texto_limpio)
         elif ext == "pdf":
             reader = PdfReader(archivo_subido)
             for pagina in reader.pages:
                 t_pag = pagina.extract_text()
                 if t_pag: lineas_extraidas.extend(t_pag.splitlines())
         
-        # FILTRO DE SEGURIDAD: Solo dejamos líneas que tengan texto real (así eliminamos espacios vacíos dañinos)
-        lineas_finales = [l.strip() for l in lineas_extraidas if l.strip()]
+        # Filtro final estricto: Eliminamos cualquier residuo vacío o menor a 2 caracteres
+        lineas_finales = [l for l in lineas_extraidas if len(l.strip()) > 2]
         total_frases = len(lineas_finales)
         
         if total_frases > 0:
@@ -48,54 +53,50 @@ if archivo_subido is not None:
             if st.button("🔊 CREAR ARCHIVO COMPLETO DE AUDIO (MP3)", use_container_width=True):
                 with st.spinner("Construyendo tu pista de entrenamiento... Esto puede tardar un momento dependiendo del tamaño del archivo."):
                     
-                    # Creamos un archivo temporal para ir uniendo todo el audio en formato MP3 limpio
                     path_salida_final = os.path.join(tempfile.gettempdir(), "entrenamiento_oaci_completo.mp3")
-                    
-                    # Lista temporal para guardar las rutas de los fragmentos de audio
                     fragmentos = []
                     
-                    # Generamos un archivo de silencio corto usando una técnica limpia de gTTS leyendo puntuación
+                    # Generamos los componentes fijos de audio de forma segura
                     tmp_silencio = os.path.join(tempfile.gettempdir(), "silencio_5s.mp3")
-                    tts_silencio = gTTS(text="...", lang="en") 
-                    tts_silencio.save(tmp_silencio)
+                    gTTS(text="...", lang="en").save(tmp_silencio)
                     
-                    # Generamos las alertas de voz claras para tus audífonos ("Now" para hablar / "Change" para parar)
                     tmp_beep_inicio = os.path.join(tempfile.gettempdir(), "beep_inicio.mp3")
                     gTTS(text="Now.", lang="en", tld="com").save(tmp_beep_inicio)
                     
                     tmp_beep_fin = os.path.join(tempfile.gettempdir(), "beep_fin.mp3")
                     gTTS(text="Change.", lang="en", tld="com").save(tmp_beep_fin)
                     
-                    # Procesamos cada una de las frases filtradas del documento
+                    # Procesamos únicamente las frases válidas que superaron el filtro
                     for i, frase in enumerate(lineas_finales):
-                        # Control extra: si por alguna razón la frase está vacía aquí, la saltamos
-                        if not frase:
+                        # Doble verificación por si acaso
+                        if not frase or len(frase.strip()) <= 2:
                             continue
                             
                         tmp_frase = os.path.join(tempfile.gettempdir(), f"frase_{i}.mp3")
                         try:
-                            gTTS(text=frase, lang="en", tld="com").save(tmp_frase)
-                            fragmentos.append(tmp_frase)
+                            # Forzamos a gTTS a ignorar cualquier símbolo raro limpiando la cadena
+                            frase_filtrada = "".join(c for c in frase if c.isalnum() or c.isspace() or c in [',', '.', '?', '!'])
                             
-                            # Agregamos las alertas y el espacio para responder
-                            fragmentos.append(tmp_beep_inicio)
-                            fragmentos.append(tmp_silencio)
-                            fragmentos.append(tmp_beep_fin)
-                        except Exception as e:
-                            # Si una frase específica falla, el programa continúa con las demás sin colgarse
+                            if len(frase_filtrada.strip()) > 2:
+                                gTTS(text=frase_filtrada, lang="en", tld="com").save(tmp_frase)
+                                fragmentos.append(tmp_frase)
+                                fragmentos.append(tmp_beep_inicio)
+                                fragmentos.append(tmp_silencio)
+                                fragmentos.append(tmp_beep_fin)
+                        except:
                             continue
                     
-                    # Fusión binaria directa de los fragmentos generados
+                    # Fusión de los archivos generados
                     if fragmentos:
                         with open(path_salida_final, "wb") as archivo_destino:
                             for f_path in fragmentos:
                                 with open(f_path, "rb") as f_origen:
                                     archivo_destino.write(f_origen.read())
                         
-                        # Limpieza de archivos individuales intermedios
+                        # Limpieza
                         for f_path in fragmentos:
                             try:
-                                if "frase_" in f_path: # Solo borramos las frases temporales
+                                if "frase_" in f_path:
                                     os.remove(f_path)
                             except: pass
                         try:
@@ -106,7 +107,7 @@ if archivo_subido is not None:
                         
                         st.success("🚀 ¡Tu pista de audio manos libres ha sido generada con éxito!")
                         
-                        # --- PASO 3: BOTÓN DE DESCARGA DIRECTA ---
+                        # --- PASO 3: BOTÓN DE DESCARGA ---
                         with open(path_salida_final, "rb") as f_mp3:
                             st.download_button(
                                 label="📥 DESCARGAR AUDIO DE ENTRENAMIENTO (.MP3)",
@@ -116,7 +117,7 @@ if archivo_subido is not None:
                                 use_container_width=True
                             )
                     else:
-                        st.error("No se pudo procesar ninguna frase del archivo.")
+                        st.error("No se pudo procesar ninguna frase del archivo debido al formato del texto.")
         else:
             st.error("El archivo cargado no contiene texto válido o está vacío.")
     except Exception as e:
