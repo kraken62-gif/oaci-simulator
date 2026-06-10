@@ -25,8 +25,7 @@ if archivo_subido is not None:
     
     try:
         if ext == "txt":
-            # Leer el archivo de texto plano de forma segura
-            contenido = archivo_subido.read().decode("utf-8")
+            contenido = archivo_subido.read().decode("utf-8", errors="ignore")
             lineas_extraidas = contenido.splitlines()
         elif ext == "docx":
             doc = Document(archivo_subido)
@@ -37,7 +36,7 @@ if archivo_subido is not None:
                 t_pag = pagina.extract_text()
                 if t_pag: lineas_extraidas.extend(t_pag.splitlines())
         
-        # Filtro estricto: Limpiar espacios y quitar líneas vacías
+        # Filtro estricto inicial
         lineas_finales = [l.strip() for l in lineas_extraidas if len(l.strip()) > 1]
         total_frases = len(lineas_finales)
         
@@ -52,29 +51,47 @@ if archivo_subido is not None:
                     path_salida_final = os.path.join(tempfile.gettempdir(), "entrenamiento_oaci_completo.mp3")
                     fragmentos = []
                     
-                    # Creamos un archivo de silencio estándar de forma segura (5 segundos)
+                    # Generar la pausa de silencio fija de forma ultra-segura
                     tmp_silencio = os.path.join(tempfile.gettempdir(), "silencia_pausa.mp3")
-                    tts_silencio = gTTS(text=" ... ... ... ", lang="en") 
-                    tts_silencio.save(tmp_silencio)
+                    try:
+                        tts_silencio = gTTS(text="ah.", lang="en") # Un sonido mínimo para asegurar que gTTS cree el archivo sin error
+                        tts_silencio.save(tmp_silencio)
+                    except Exception as e:
+                        st.error(f"Error crítico al inicializar motor de audio: {e}")
+                        st.stop()
                     
-                    # Procesamos las frases
+                    # Barra de progreso interna para ver en vivo cuál frase se está procesando
+                    progreso_barra = st.progress(0, text="Procesando frases...")
+                    
+                    # Procesamos las frases una por una
                     for i, frase in enumerate(lineas_finales):
+                        progreso_barra.progress((i + 1) / total_frases, text=f"Convirtiendo frase {i+1} de {total_frases}...")
+                        
                         if not frase:
+                            continue
+                        
+                        # FILTRO EXTREMO: Conservamos SOLO letras, números, espacios, puntos, comas y signos normales
+                        frase_filtrada = "".join(
+                            c for c in frase 
+                            if c.isalnum() or c.isspace() or c in [".", ",", "?", "!", "'", "-"]
+                        ).strip()
+                        
+                        # Si después del filtro la frase quedó vacía o demasiado corta, la ignoramos y seguimos
+                        if len(frase_filtrada) < 2:
                             continue
                             
                         tmp_frase = os.path.join(tempfile.gettempdir(), f"f_{i}.mp3")
                         try:
-                            # Limpieza básica de la frase para evitar caracteres incompatibles
-                            frase_limpia = frase.replace('"', '').replace('(', '').replace(')', '')
-                            
-                            # Generar la voz de la frase en inglés estándar
-                            tts_vuelo = gTTS(text=frase_limpia, lang="en", tld="com")
+                            # Intentamos generar el audio de la frase en inglés estándar
+                            tts_vuelo = gTTS(text=frase_filtrada, lang="en", tld="com")
                             tts_vuelo.save(tmp_frase)
                             
-                            # Unimos la frase y su respectivo silencio para que respondas
-                            fragmentos.append(tmp_frase)
-                            fragmentos.append(tmp_silencio)
+                            # Si se guardó correctamente, la añadimos a la lista junto con su espacio para responder
+                            if os.path.exists(tmp_frase) and os.path.getsize(tmp_frase) > 0:
+                                fragmentos.append(tmp_frase)
+                                fragmentos.append(tmp_silencio)
                         except:
+                            # SI UNA FRASE DA ERROR, EL PROGRAMA SIMPLEMENTE LA IGNORA Y SIGUE CON LA SIGUIENTE
                             continue
                     
                     # Fusión de los archivos generados en un solo MP3 masivo
@@ -105,7 +122,7 @@ if archivo_subido is not None:
                                 use_container_width=True
                             )
                     else:
-                        st.error("No se pudo procesar el texto del archivo.")
+                        st.error("No se pudo procesar ninguna frase del archivo. Verifica que contenga texto en inglés válido.")
         else:
             st.error("El archivo cargado no contiene texto válido o está vacío.")
     except Exception as e:
